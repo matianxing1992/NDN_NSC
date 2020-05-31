@@ -1,0 +1,45 @@
+Producer namespace:
+    /eshop/cardchecker
+
+Thunk namespace
+    /eshop/cardchecker/results/<auto_incrementing_number>
+
+Consumer namespace
+    /pos/device1/cardchecker/inputs/<auto_incrementing_number>
+
+-------------------------------------
+Pseudocode
+-------------------------------------
+
+Concept
+    Execute C++ code and provide credit card number as input
+    "GOOD" or "BAD" printed to screen
+
+Consumer
+    Does basic CC checking (is it all digits, is it between 12-19 digits)
+    Publish CC# to pos1/cardchecker/inputs/<auto_incrementing_number>
+    Send Notification Interest to /eshop/cardchecker
+        Signed by API KEY
+        Contains Parameter for Forwarding Hint to pos1/cardchecker/inputs/<auto_incrementing_number>
+    Receive Positive response from Producer for Notification
+    Receive Data from Producer for CC#
+        Signed by Producer KEY
+        Contains Parameter for Forwarding Hint to /eshop/cardchecker/results/auto_incrementing_number
+    Send Interest to return result
+        If result ready, receive Data right away with a positive status message
+        Else if result not ready, Producer will send Data pointing to a new thunk
+
+Producer
+    Listening on /eshop/cardchecker
+    Receive notification interest, and check that signed by API KEY. Return positive data response
+    Send interest to parameter from above, now as forwarding Hint
+        Include thunk name where result will be stored as parameter
+        Publish thunk name for listening
+    Receive data and execute desired CC# Checking Function
+    Upon Interest receipt for final result, return
+
+
+
+
+
+    
