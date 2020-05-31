@@ -14,12 +14,16 @@
 #include <ndn-cxx/key-locator.hpp>
 #include <ndn-cxx/detail/cancel-handle.hpp>
 #include <boost/asio/io_service.hpp>
+
+#define BOOST_THREAD_PROVIDES_FUTURE
+#include <boost/thread.hpp>
+#include <boost/thread/future.hpp>
 // #include <boost/fiber/future/async.hpp>
 // #include <boost/fiber/future/future.hpp>
-
 #include <thread>
 #include <future>
 #include <chrono>
+
 #include <functional>
 #include <fstream>
 #include <string>
@@ -147,31 +151,29 @@ private:
         std::cerr << "Will wait 75 percent of that time before defferring: " << std::endl;
         std::cerr << interest.getInterestLifetime().count() * 0.75 << std::endl;
 
-        std::future<bool> fut = std::async(std::launch::async, ccCheck, inputValue);
+        boost::future<bool> fut = boost::async(bind(&Producer::ccCheck, this, inputValue));
         auto waitTime = interest.getInterestLifetime().count();
         waitTime *= .75;
-        std::string dataValue;
-        if (fut.wait_for(std::chrono::milliseconds(waitTime)) == std::future_status::ready)
+        if (fut.wait_for(boost::chrono::milliseconds(waitTime)) == boost::future_status::ready)
         {
-            std::cerr << "Future got a result, sending" << std::endl;
-
-            if (fut.get())
-                dataValue = "GOOD";
-            else
-                dataValue = "BAD";
-
-            auto data = createData(interest.getName(), dataValue, DAN_IDENTITY);
+            auto data = createData(interest.getName(), "GOOD", DAN_IDENTITY);
             m_face.put(*data);
         }
         else
         {
-            std::cerr << "Future Timed out, sending deferred location" << std::endl;
-            dataValue = "TOO LONG";
-            auto data = createData(interest.getName(), dataValue, DAN_IDENTITY);
+            std::cerr << "TIMING OUT" << std::endl;
+            auto data = createData(interest.getName(), "TIME OUT", DAN_IDENTITY);
             m_face.put(*data);
         }
 
         std::cerr << "------------------------" << std::endl;
+    }
+
+    bool ccCheck(std::string inputValue)
+    {
+        sleep(10);
+        std::cerr << "FINISHED SLEEP" << std::endl;
+        return true;
     }
 
     //extract Interest Parameter as String
@@ -228,13 +230,6 @@ private:
         m_keyChain.sign(*data, signingByIdentity(identity));
 
         return data;
-    }
-
-    //returns result of Credit Card Check
-    static bool ccCheck(std::string ccNum)
-    {
-        sleep(2.9);
-        return true;
     }
 
     //Boilerplate NACK, Timeout, Failure to Register
