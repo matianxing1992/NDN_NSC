@@ -138,7 +138,7 @@ private:
     }
 
     //Print result Data
-    void onResultData(const Interest &, const Data &data)
+    void onResultData(const Interest &interest, const Data &data)
     {
         std::cerr << "Received Result Data from Producer" << std::endl;
 
@@ -146,22 +146,24 @@ private:
         {
             std::string ccResult(reinterpret_cast<const char *>(data.getContent().value()));
 
-            std::cerr << "Result of RPC Call, Credit Card Number is: " << ccResult << std::endl;
-            std::cerr << "------------------------" << std::endl;
-
             //check for application NACK
             if (isAppNACK(ccResult))
             {
+
                 std::string newResultName = ccResult.substr(APP_NACK.length(), ccResult.length() - APP_NACK.length());
-                Interest interest = createInterest(newResultName, false, true);
-                m_keyChain.sign(interest, security::signingByIdentity(Name(CONSUMER_IDENTITY)));
-                m_face.expressInterest(interest,
+                std::cerr << "Received Delay message, now retrying " << newResultName << std::endl;
+                Interest delayInterest = createInterest(newResultName, false, true);
+                m_keyChain.sign(delayInterest, security::signingByIdentity(Name(CONSUMER_IDENTITY)));
+                std::cerr << delayInterest << std::endl;
+                m_face.expressInterest(delayInterest,
                                        bind(&rpcConsumer::onResultData, this, _1, _2),
                                        bind(&rpcConsumer::onNack, this, _1, _2),
                                        bind(&rpcConsumer::onTimeout, this, _1));
             }
             else
             {
+                std::cerr << "Result of RPC Call, Credit Card Number is: " << ccResult << std::endl;
+                std::cerr << "------------------------" << std::endl;
                 m_ioService.stop();
             }
         }

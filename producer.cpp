@@ -61,7 +61,7 @@ private:
     const std::string BASE = "/eshop/cardchecker";
     const std::string FUNCTION = BASE + "/function/";
     const std::string RESULTS = BASE + "/results/";
-    const std::string DELAY_NAME = "/delay/";
+    const std::string DELAY_NAME = "delay/";
     const std::string DELIMITER = "/";
 
     //Results Messages
@@ -127,7 +127,7 @@ private:
             std::string dataValue = extractDataValue(data);
             auto fut = boost::async(bind(&rpcProducer::ccCheck, this, dataValue)).share();
             m_face.setInterestFilter(RESULTS + token,
-                                     bind(&rpcProducer::onResultInterest, this, _1, _2, RESULTS + token, fut));
+                                     bind(&rpcProducer::onResultInterest, this, _1, _2, RESULTS, token, fut));
 
             std::cerr << "Successfully fetched input paramaters from consumer" << std::endl;
             std::cerr << dataValue << std::endl;
@@ -137,11 +137,12 @@ private:
     }
 
     //Consumer requests data, generate and respond with it
-    void onResultInterest(const InterestFilter &filterHandle, const Interest &interest, std::string baseName, boost::shared_future<bool> fut)
+    void onResultInterest(const InterestFilter &filterHandle, const Interest &interest, std::string baseName, std::string tokenName, boost::shared_future<bool> fut)
     {
         if (verifyInterestSignature(interest, CONSUMER_IDENTITY))
         {
-            std::cerr << "Received interest for final results at " << baseName << std::endl;
+            std::cerr << "Received interest for final results at " << baseName + tokenName << std::endl;
+            std::cerr << interest << std::endl;
             std::cerr << "Will wait 75 percent of Interest Lifetime before sending delay: " << interest.getInterestLifetime().count() * WAIT_TIME_FACTOR << std::endl;
             auto waitTime = interest.getInterestLifetime().count();
             waitTime *= WAIT_TIME_FACTOR;
@@ -151,7 +152,7 @@ private:
             }
             else
             {
-                sendDelayResult(interest, baseName, fut);
+                sendDelayResult(interest, baseName, tokenName, fut);
             }
 
             std::cerr << "------------------------" << std::endl;
@@ -172,13 +173,13 @@ private:
     }
 
     //Requested data was still in process, send delay message
-    void sendDelayResult(const Interest &interest, std::string baseName, boost::shared_future<bool> fut)
+    void sendDelayResult(const Interest &interest, std::string baseName, std::string tokenName, boost::shared_future<bool> fut)
     {
-        std::string delayedDataName = baseName + DELAY_NAME;
+        std::string delayedDataName = baseName + DELAY_NAME + tokenName;
         auto data = createData(interest.getName(), APP_NACK + delayedDataName, PRODUCER_IDENTITY);
         m_face.put(*data);
         m_face.setInterestFilter(delayedDataName,
-                                 bind(&rpcProducer::onResultInterest, this, _1, _2, delayedDataName, fut));
+                                 bind(&rpcProducer::onResultInterest, this, _1, _2, baseName + DELAY_NAME, tokenName, fut));
 
         std::cerr << "Timed out on generating result, sending delay message" << std::endl;
         std::cerr << "Now listening to " << delayedDataName << std::endl;
@@ -187,6 +188,7 @@ private:
     //Basic check to verify credit card
     bool ccCheck(std::string inputValue)
     {
+        sleep(10);
         //checks that Credit Card is 16 Digits Long and is all Digits
         if (inputValue.length() != CC_LENGTH || !allStringIsDigit(inputValue))
             return false;
