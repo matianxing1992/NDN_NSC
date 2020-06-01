@@ -92,16 +92,15 @@ private:
                                bind(&rpcConsumer::onNack, this, _1, _2),
                                bind(&rpcConsumer::onTimeout, this, _1));
 
-        std::cerr << "Sending Notification Interest" << std::endl;
-        std::cerr << interest << std::endl;
+        std::cerr << "Sending Notification Interest\n"
+                  << PRODUCER_FUNC_NAME << std::endl;
         std::cerr << "------------------------" << std::endl;
     }
 
     //Acknowledge that Producer received RPC Notification
     void onNotificationData(const Interest &, const Data &data)
     {
-        std::cerr << "Received Response to Notification:" << std::endl;
-        std::cerr << data << std::endl;
+        std::cerr << "Received Acknowledgement to Notification:" << std::endl;
         std::cerr << "------------------------" << std::endl;
     }
 
@@ -133,7 +132,7 @@ private:
                                bind(&rpcConsumer::onTimeout, this, _1));
 
         std::cerr << "Sending Interest for final Result Data " << std::endl;
-        std::cerr << interest << std::endl;
+        std::cerr << resultName << std::endl;
         std::cerr << "------------------------" << std::endl;
     }
 
@@ -151,14 +150,14 @@ private:
             {
 
                 std::string newResultName = ccResult.substr(APP_NACK.length(), ccResult.length() - APP_NACK.length());
-                std::cerr << "Received Delay message, now retrying " << newResultName << std::endl;
                 Interest delayInterest = createInterest(newResultName, false, true);
                 m_keyChain.sign(delayInterest, security::signingByIdentity(Name(CONSUMER_IDENTITY)));
-                std::cerr << delayInterest << std::endl;
                 m_face.expressInterest(delayInterest,
                                        bind(&rpcConsumer::onResultData, this, _1, _2),
                                        bind(&rpcConsumer::onNack, this, _1, _2),
                                        bind(&rpcConsumer::onTimeout, this, _1));
+
+                std::cerr << "Received Delay message, now retrying " << newResultName << std::endl;
             }
             else
             {

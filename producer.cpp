@@ -86,10 +86,9 @@ private:
     }
 
     //Received notification of RPC call, acknolwedge and request consumer input
-    void onNotification(const InterestFilter &, const Interest &interest)
+    void onNotification(const InterestFilter &interestFil, const Interest &interest)
     {
-        std::cerr << "Received Notification:\n"
-                  << interest.getName() << std::endl;
+        std::cerr << "Received Notification at: " << interestFil.getPrefix() << std::endl;
 
         if (verifyInterestSignature(interest, CONSUMER_IDENTITY))
         {
@@ -115,7 +114,7 @@ private:
                                bind(&rpcProducer::onNack, this, _1, _2),
                                bind(&rpcProducer::onTimeout, this, _1));
 
-        std::cerr << "Sending Interest for CC Number " << interest << std::endl;
+        std::cerr << "Sending Interest for CC Number " << consumerInputParam << std::endl;
         std::cerr << "------------------------" << std::endl;
     }
 
@@ -142,7 +141,6 @@ private:
         if (verifyInterestSignature(interest, CONSUMER_IDENTITY))
         {
             std::cerr << "Received interest for final results at " << baseName + tokenName << std::endl;
-            std::cerr << interest << std::endl;
             std::cerr << "Will wait 75 percent of Interest Lifetime before sending delay: " << interest.getInterestLifetime().count() * WAIT_TIME_FACTOR << std::endl;
             auto waitTime = interest.getInterestLifetime().count();
             waitTime *= WAIT_TIME_FACTOR;
@@ -162,7 +160,6 @@ private:
     //Requested data finished generating, respond with result
     void sendGeneratedResult(const Interest &interest, boost::shared_future<bool> fut)
     {
-        std::cerr << "Generated Result, sending" << std::endl;
         std::string dataValue;
         if (fut.get())
             dataValue = SUCCESS;
@@ -170,6 +167,8 @@ private:
             dataValue = FAILURE;
         auto data = createData(interest.getName(), dataValue, PRODUCER_IDENTITY);
         m_face.put(*data);
+
+        std::cerr << "Generated Result, " << dataValue << " , sending" << std::endl;
     }
 
     //Requested data was still in process, send delay message
@@ -188,7 +187,6 @@ private:
     //Basic check to verify credit card
     bool ccCheck(std::string inputValue)
     {
-        sleep(10);
         //checks that Credit Card is 16 Digits Long and is all Digits
         if (inputValue.length() != CC_LENGTH || !allStringIsDigit(inputValue))
             return false;
