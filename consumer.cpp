@@ -19,26 +19,27 @@
 
 using namespace ndn;
 
-class PosConsumer
+class rpcConsumer
 {
 public:
-    PosConsumer()
+    rpcConsumer(char *ccInput)
         : m_face(m_ioService),
-          m_scheduler(m_ioService)
+          m_scheduler(m_ioService),
+          CCNUM(ccInput)
     {
         rpcCall = 0;
     }
 
     void run()
     {
-        std::cerr << "Attempting to schedule" << std::endl;
+        std::cerr << "Attempting to rpc call" << std::endl;
         std::cerr << "------------------------" << std::endl;
 
         m_face.registerPrefix(INPUT_NAMESPACE,
                               RegisterPrefixSuccessCallback(),
-                              bind(&PosConsumer::onRegisterFailed, this, _1, _2));
+                              bind(&rpcConsumer::onRegisterFailed, this, _1, _2));
 
-        m_scheduler.schedule(1_ns, bind(&PosConsumer::pubAndNotify, this));
+        m_scheduler.schedule(1_ns, bind(&rpcConsumer::pubAndNotify, this));
         m_ioService.run();
     }
 
@@ -60,11 +61,10 @@ private:
     Scheduler m_scheduler;
     KeyChain m_keyChain;
     int rpcCall;
-    const std::string DAN_IDENTITY = "/pos/device1";
-    const std::string CCNUM = "1234567890";
+    const std::string CCNUM;
+    const std::string CONSUMER_IDENTITY = "/pos/device1";
     const std::string PRODUCER_FUNC_NAME = "/eshop/cardchecker/function";
-    const std::string PRODUCER_RESULTS_NAME = "/eshop/cardchecker/results/1";
-    const std::string INPUT_NAMESPACE = "/pos/device1/cardchecker/inputs/";
+    const std::string INPUT_NAMESPACE = CONSUMER_IDENTITY + "/cardchecker/inputs/";
     const std::string APP_NACK = "APP_NACK";
 
     //Publish Input data for future RPC Producer to retrieve
@@ -72,7 +72,7 @@ private:
     {
         int publishNum = ++rpcCall;
         m_face.setInterestFilter(INPUT_NAMESPACE + std::to_string(publishNum),
-                                 bind(&PosConsumer::onInterestForInput, this, _1, _2));
+                                 bind(&rpcConsumer::onInterestForInput, this, _1, _2));
 
         std::cerr << "LISTENING TO " << INPUT_NAMESPACE + std::to_string(publishNum) << std::endl;
         std::cerr << "RPC Call is at " << rpcCall << std::endl;
@@ -85,15 +85,15 @@ private:
     {
         Interest interest = createInterest(PRODUCER_FUNC_NAME, true, true);
         addInterestParameterString(INPUT_NAMESPACE + std::to_string(publishNum), interest);
-        m_keyChain.sign(interest, security::signingByIdentity(Name(DAN_IDENTITY)));
+        m_keyChain.sign(interest, security::signingByIdentity(Name(CONSUMER_IDENTITY)));
+        m_face.expressInterest(interest,
+                               bind(&rpcConsumer::onNotificationData, this, _1, _2),
+                               bind(&rpcConsumer::onNack, this, _1, _2),
+                               bind(&rpcConsumer::onTimeout, this, _1));
 
         std::cerr << "Sending Notification Interest" << std::endl;
         std::cerr << interest << std::endl;
         std::cerr << "------------------------" << std::endl;
-        m_face.expressInterest(interest,
-                               bind(&PosConsumer::onNotificationData, this, _1, _2),
-                               bind(&PosConsumer::onNack, this, _1, _2),
-                               bind(&PosConsumer::onTimeout, this, _1));
     }
 
     //Acknowledge that Producer received RPC Notification
@@ -110,11 +110,10 @@ private:
         std::cerr << "RECEIVED AN INTEREST FOR CC" << std::endl;
         std::cerr << "------------------------" << std::endl;
 
-        auto data = createData(interest.getName(), CCNUM, DAN_IDENTITY);
+        auto data = createData(interest.getName(), CCNUM, CONSUMER_IDENTITY);
         m_face.put(*data);
 
         std::string resultName = extractInterestParam(interest);
-
         sendInterestForResult(resultName);
     }
 
@@ -122,15 +121,15 @@ private:
     void sendInterestForResult(std::string resultName)
     {
         Interest interest = createInterest(resultName, false, true);
-        m_keyChain.sign(interest, security::signingByIdentity(Name(DAN_IDENTITY)));
+        m_keyChain.sign(interest, security::signingByIdentity(Name(CONSUMER_IDENTITY)));
+        m_face.expressInterest(interest,
+                               bind(&rpcConsumer::onResultData, this, _1, _2),
+                               bind(&rpcConsumer::onNack, this, _1, _2),
+                               bind(&rpcConsumer::onTimeout, this, _1));
 
         std::cerr << "Sending Interest for final Result Data " << std::endl;
         std::cerr << interest << std::endl;
         std::cerr << "------------------------" << std::endl;
-        m_face.expressInterest(interest,
-                               bind(&PosConsumer::onResultData, this, _1, _2),
-                               bind(&PosConsumer::onNack, this, _1, _2),
-                               bind(&PosConsumer::onTimeout, this, _1));
     }
 
     //Print result Data
@@ -147,11 +146,11 @@ private:
         {
             std::string newResultName = ccResult.substr(APP_NACK.length(), ccResult.length() - APP_NACK.length());
             Interest interest = createInterest(newResultName, false, true);
-            m_keyChain.sign(interest, security::signingByIdentity(Name(DAN_IDENTITY)));
+            m_keyChain.sign(interest, security::signingByIdentity(Name(CONSUMER_IDENTITY)));
             m_face.expressInterest(interest,
-                                   bind(&PosConsumer::onResultData, this, _1, _2),
-                                   bind(&PosConsumer::onNack, this, _1, _2),
-                                   bind(&PosConsumer::onTimeout, this, _1));
+                                   bind(&rpcConsumer::onResultData, this, _1, _2),
+                                   bind(&rpcConsumer::onNack, this, _1, _2),
+                                   bind(&rpcConsumer::onTimeout, this, _1));
         }
         else
         {
@@ -204,6 +203,44 @@ private:
         return data;
     }
 
+    //Retrieves Key for a specific identity
+    ndn::security::pib::Key getKeyForIdentity(std::string identity)
+    {
+        const auto &pib = m_keyChain.getPib();
+        const auto &verifyIdentity = pib.getIdentity(Name(identity));
+        return verifyIdentity.getDefaultKey();
+    }
+
+    //Signature Verification Functions for Interest
+    bool verifyInterestSignature(const Interest &interest, std::string identity)
+    {
+        if (security::verifySignature(interest, getKeyForIdentity(identity)))
+        {
+            std::cerr << "Interest Signature - Verified" << std::endl;
+            return true;
+        }
+        else
+        {
+            std::cerr << "Interest Signature - ERROR, can't verify" << std::endl;
+            return false;
+        }
+    }
+
+    //Signature Verification Functions for Data
+    bool verifyDataSignature(const Data &data, std::string identity)
+    {
+        if (security::verifySignature(data, getKeyForIdentity(identity)))
+        {
+            std::cerr << "Data Signature - Verified" << std::endl;
+            return true;
+        }
+        else
+        {
+            std::cerr << "Data Signature - ERROR, can't verify" << std::endl;
+            return false;
+        }
+    }
+
     //Boilerplate NACK, Timeout, Failure to Register
     void onNack(const Interest &, const lp::Nack &nack) const
     {
@@ -230,7 +267,7 @@ int main(int argc, char **argv)
 {
     try
     {
-        PosConsumer consumer1;
+        rpcConsumer consumer1(argv[1]);
         consumer1.run();
         return 0;
     }

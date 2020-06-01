@@ -10,16 +10,11 @@
 #include <ndn-cxx/security/v2/validator.hpp>
 #include <ndn-cxx/security/v2/validation-callback.hpp>
 #include <ndn-cxx/security/v2/certificate-fetcher-offline.hpp>
-#include <ndn-cxx/signature-info.hpp>
-#include <ndn-cxx/key-locator.hpp>
-#include <ndn-cxx/detail/cancel-handle.hpp>
 #include <boost/asio/io_service.hpp>
 
 #define BOOST_THREAD_PROVIDES_FUTURE
 #include <boost/thread.hpp>
 #include <boost/thread/future.hpp>
-// #include <boost/fiber/future/async.hpp>
-// #include <boost/fiber/future/future.hpp>
 #include <thread>
 #include <future>
 #include <chrono>
@@ -31,11 +26,11 @@
 
 using namespace ndn;
 
-class Producer
+class rpcProducer
 {
 public:
-    Producer() : m_face(m_ioService),
-                 m_scheduler(m_ioService)
+    rpcProducer() : m_face(m_ioService),
+                    m_scheduler(m_ioService)
     {
         //init result thunks to 0
         resultThunk = 0;
@@ -46,7 +41,7 @@ public:
         std::cerr << "PRODUCER" << std::endl;
         std::cerr << "Attempting to schedule" << std::endl;
         std::cerr << "------------------------" << std::endl;
-        m_scheduler.schedule(1_ns, bind(&Producer::waitForNotification, this));
+        m_scheduler.schedule(1_ns, bind(&rpcProducer::waitForNotification, this));
         m_ioService.run();
     }
 
@@ -80,10 +75,10 @@ private:
     {
         m_face.registerPrefix(BASE,
                               RegisterPrefixSuccessCallback(),
-                              bind(&Producer::onRegisterFailed, this, _1, _2));
+                              bind(&rpcProducer::onRegisterFailed, this, _1, _2));
 
         m_face.setInterestFilter(FUNCTION,
-                                 bind(&Producer::onNotification, this, _1, _2));
+                                 bind(&rpcProducer::onNotification, this, _1, _2));
         std::cerr << "REGISTER PREFIX " << BASE << std::endl;
         std::cerr << "LISTENING TO " << FUNCTION << std::endl;
         std::cerr << "------------------------" << std::endl;
@@ -115,9 +110,9 @@ private:
         addInterestParameterString(RESULTS + token, interest);
         m_keyChain.sign(interest, security::signingByIdentity(Name(PRODUCER_IDENTITY)));
         m_face.expressInterest(interest,
-                               bind(&Producer::onConsumerData, this, _1, _2, token),
-                               bind(&Producer::onNack, this, _1, _2),
-                               bind(&Producer::onTimeout, this, _1));
+                               bind(&rpcProducer::onConsumerData, this, _1, _2, token),
+                               bind(&rpcProducer::onNack, this, _1, _2),
+                               bind(&rpcProducer::onTimeout, this, _1));
 
         std::cerr << "Sending Interest for CC Number " << interest << std::endl;
         std::cerr << "------------------------" << std::endl;
@@ -129,9 +124,9 @@ private:
         if (verifyDataSignature(data, CONSUMER_IDENTITY))
         {
             std::string dataValue = extractDataValue(data);
-            auto fut = boost::async(bind(&Producer::ccCheck, this, dataValue)).share();
+            auto fut = boost::async(bind(&rpcProducer::ccCheck, this, dataValue)).share();
             m_face.setInterestFilter(RESULTS + token,
-                                     bind(&Producer::onResultInterest, this, _1, _2, RESULTS, token, fut));
+                                     bind(&rpcProducer::onResultInterest, this, _1, _2, RESULTS, token, fut));
 
             std::cerr << "Successfully fetched input paramaters from consumer" << std::endl;
             std::cerr << dataValue << std::endl;
@@ -183,7 +178,7 @@ private:
         auto data = createData(interest.getName(), APP_NACK + baseName + DELAY_NAME + tokenName, PRODUCER_IDENTITY);
         m_face.put(*data);
         m_face.setInterestFilter(baseName + DELAY_NAME + tokenName,
-                                 bind(&Producer::onResultInterest, this, _1, _2, baseName + DELAY_NAME, tokenName, fut));
+                                 bind(&rpcProducer::onResultInterest, this, _1, _2, baseName + DELAY_NAME, tokenName, fut));
     }
 
     //TODO
@@ -314,7 +309,7 @@ int main(int argc, char **argv)
 {
     try
     {
-        Producer producer;
+        rpcProducer producer;
         producer.run();
         return 0;
     }
