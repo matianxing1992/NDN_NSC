@@ -61,10 +61,11 @@ private:
     const std::string BASE = "/eshop/cardchecker";
     const std::string FUNCTION = BASE + "/function/";
     const std::string RESULTS = BASE + "/results/";
-    const std::string DELAY_NAME = "delay/";
+    const std::string DELAY_NAME = "/delay/";
     const std::string DELIMITER = "/";
 
     //Results Messages
+    const size_t CC_LENGTH = 16;
     const std::string APP_ACK = "APP_ACK";
     const std::string APP_NACK = "APP_NACK";
     const std::string SUCCESS = "GOOD";
@@ -126,7 +127,7 @@ private:
             std::string dataValue = extractDataValue(data);
             auto fut = boost::async(bind(&rpcProducer::ccCheck, this, dataValue)).share();
             m_face.setInterestFilter(RESULTS + token,
-                                     bind(&rpcProducer::onResultInterest, this, _1, _2, RESULTS, token, fut));
+                                     bind(&rpcProducer::onResultInterest, this, _1, _2, RESULTS + token, fut));
 
             std::cerr << "Successfully fetched input paramaters from consumer" << std::endl;
             std::cerr << dataValue << std::endl;
@@ -136,11 +137,11 @@ private:
     }
 
     //Consumer requests data, generate and respond with it
-    void onResultInterest(const InterestFilter &filterHandle, const Interest &interest, std::string baseName, std::string tokenName, boost::shared_future<bool> fut)
+    void onResultInterest(const InterestFilter &filterHandle, const Interest &interest, std::string baseName, boost::shared_future<bool> fut)
     {
         if (verifyInterestSignature(interest, CONSUMER_IDENTITY))
         {
-            std::cerr << "Received interest for final results at " << baseName + tokenName << std::endl;
+            std::cerr << "Received interest for final results at " << baseName << std::endl;
             std::cerr << "Will wait 75 percent of Interest Lifetime before sending delay: " << interest.getInterestLifetime().count() * WAIT_TIME_FACTOR << std::endl;
             auto waitTime = interest.getInterestLifetime().count();
             waitTime *= WAIT_TIME_FACTOR;
@@ -150,7 +151,7 @@ private:
             }
             else
             {
-                sendDelayResult(interest, baseName, tokenName, fut);
+                sendDelayResult(interest, baseName, fut);
             }
 
             std::cerr << "------------------------" << std::endl;
@@ -171,22 +172,62 @@ private:
     }
 
     //Requested data was still in process, send delay message
-    void sendDelayResult(const Interest &interest, std::string baseName, std::string tokenName, boost::shared_future<bool> fut)
+    void sendDelayResult(const Interest &interest, std::string baseName, boost::shared_future<bool> fut)
     {
-        std::cerr << "Timed out on generating result, sending delay message" << std::endl;
-        std::cerr << "Now listening to " << baseName + DELAY_NAME + tokenName << std::endl;
-        auto data = createData(interest.getName(), APP_NACK + baseName + DELAY_NAME + tokenName, PRODUCER_IDENTITY);
+        std::string delayedDataName = baseName + DELAY_NAME;
+        auto data = createData(interest.getName(), APP_NACK + delayedDataName, PRODUCER_IDENTITY);
         m_face.put(*data);
-        m_face.setInterestFilter(baseName + DELAY_NAME + tokenName,
-                                 bind(&rpcProducer::onResultInterest, this, _1, _2, baseName + DELAY_NAME, tokenName, fut));
+        m_face.setInterestFilter(delayedDataName,
+                                 bind(&rpcProducer::onResultInterest, this, _1, _2, delayedDataName, fut));
+
+        std::cerr << "Timed out on generating result, sending delay message" << std::endl;
+        std::cerr << "Now listening to " << delayedDataName << std::endl;
     }
 
-    //TODO
-    //Write code to actually check for Valid CC
+    //Basic check to verify credit card
     bool ccCheck(std::string inputValue)
     {
-        sleep(10);
+        //checks that Credit Card is 16 Digits Long and is all Digits
+        if (inputValue.length() != CC_LENGTH || !allStringIsDigit(inputValue))
+            return false;
+
+        //Check with Luhn's Algorithms
+        if (!luhnAlgo(inputValue))
+            return false;
+
         return true;
+    }
+
+    bool allStringIsDigit(std::string inputValue)
+    {
+        for (size_t i = 0; i < inputValue.length(); i++)
+        {
+            if (!std::isdigit(inputValue.at(i)))
+                return false;
+        }
+        return true;
+    }
+
+    bool luhnAlgo(std::string inputValue)
+    {
+        //find sum of first 15 numbers according to luhns
+        int sum = 0;
+        for (size_t i = 0; i < inputValue.length() - 1; i++)
+        {
+            int x = inputValue.at(i) - '0';
+            if (i % 2 == 0)
+            {
+                x *= 2;
+                if (x >= 10)
+                    x = (x / 10) + (x % 10);
+            }
+            sum += x;
+        }
+        //check first 15 sum + check number is divisble by 10 with no remainder
+        if (((sum + (inputValue.at(inputValue.length() - 1) - '0')) % 10) == 0)
+            return true;
+        else
+            return false;
     }
 
     //extract Interest Parameter as String

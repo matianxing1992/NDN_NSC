@@ -267,6 +267,11 @@ int main(int argc, char **argv)
 {
     try
     {
+        if (argc != 2)
+        {
+            std::cerr << "Usage: ./consumer <credit card num>" << std::endl;
+            exit(1);
+        }
         rpcConsumer consumer1(argv[1]);
         consumer1.run();
         return 0;
