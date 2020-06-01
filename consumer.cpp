@@ -63,6 +63,7 @@ private:
     int rpcCall;
     const std::string CCNUM;
     const std::string CONSUMER_IDENTITY = "/pos/device1";
+    const std::string PRODUCER_IDENTITY = "/eshop";
     const std::string PRODUCER_FUNC_NAME = "/eshop/cardchecker/function";
     const std::string INPUT_NAMESPACE = CONSUMER_IDENTITY + "/cardchecker/inputs/";
     const std::string APP_NACK = "APP_NACK";
@@ -107,14 +108,18 @@ private:
     //Respond with original Input Data
     void onInterestForInput(const InterestFilter &, const Interest &interest)
     {
-        std::cerr << "RECEIVED AN INTEREST FOR CC" << std::endl;
-        std::cerr << "------------------------" << std::endl;
+        std::cerr << "Received an interest for credit card number input" << std::endl;
+        if (verifyInterestSignature(interest, PRODUCER_IDENTITY))
+        {
+            std::cerr << "Sending Credit Card Number Data as Published Earlier" << std::endl;
+            std::cerr << "------------------------" << std::endl;
 
-        auto data = createData(interest.getName(), CCNUM, CONSUMER_IDENTITY);
-        m_face.put(*data);
+            auto data = createData(interest.getName(), CCNUM, CONSUMER_IDENTITY);
+            m_face.put(*data);
 
-        std::string resultName = extractInterestParam(interest);
-        sendInterestForResult(resultName);
+            std::string resultName = extractInterestParam(interest);
+            sendInterestForResult(resultName);
+        }
     }
 
     //Request results of RPC Call from location provided as Interest Parameters
@@ -135,26 +140,30 @@ private:
     //Print result Data
     void onResultData(const Interest &, const Data &data)
     {
-        std::string ccResult(reinterpret_cast<const char *>(data.getContent().value()));
-
         std::cerr << "Received Result Data from Producer" << std::endl;
-        std::cerr << ccResult << std::endl;
-        std::cerr << "------------------------" << std::endl;
 
-        //check for application NACK
-        if (isAppNACK(ccResult))
+        if (verifyDataSignature(data, PRODUCER_IDENTITY))
         {
-            std::string newResultName = ccResult.substr(APP_NACK.length(), ccResult.length() - APP_NACK.length());
-            Interest interest = createInterest(newResultName, false, true);
-            m_keyChain.sign(interest, security::signingByIdentity(Name(CONSUMER_IDENTITY)));
-            m_face.expressInterest(interest,
-                                   bind(&rpcConsumer::onResultData, this, _1, _2),
-                                   bind(&rpcConsumer::onNack, this, _1, _2),
-                                   bind(&rpcConsumer::onTimeout, this, _1));
-        }
-        else
-        {
-            m_ioService.stop();
+            std::string ccResult(reinterpret_cast<const char *>(data.getContent().value()));
+
+            std::cerr << "Result of RPC Call, Credit Card Number is: " << ccResult << std::endl;
+            std::cerr << "------------------------" << std::endl;
+
+            //check for application NACK
+            if (isAppNACK(ccResult))
+            {
+                std::string newResultName = ccResult.substr(APP_NACK.length(), ccResult.length() - APP_NACK.length());
+                Interest interest = createInterest(newResultName, false, true);
+                m_keyChain.sign(interest, security::signingByIdentity(Name(CONSUMER_IDENTITY)));
+                m_face.expressInterest(interest,
+                                       bind(&rpcConsumer::onResultData, this, _1, _2),
+                                       bind(&rpcConsumer::onNack, this, _1, _2),
+                                       bind(&rpcConsumer::onTimeout, this, _1));
+            }
+            else
+            {
+                m_ioService.stop();
+            }
         }
     }
 
