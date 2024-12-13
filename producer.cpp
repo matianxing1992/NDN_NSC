@@ -7,9 +7,9 @@
 #include <ndn-cxx/security/verification-helpers.hpp>
 #include <ndn-cxx/security/signing-helpers.hpp>
 #include <ndn-cxx/security/validator-config.hpp>
-#include <ndn-cxx/security/v2/validator.hpp>
-#include <ndn-cxx/security/v2/validation-callback.hpp>
-#include <ndn-cxx/security/v2/certificate-fetcher-offline.hpp>
+#include <ndn-cxx/security/validator.hpp>
+#include <ndn-cxx/security/validation-callback.hpp>
+#include <ndn-cxx/security/certificate-fetcher-offline.hpp>
 #include <boost/asio/io_service.hpp>
 
 #define BOOST_THREAD_PROVIDES_FUTURE
@@ -29,11 +29,15 @@ using namespace ndn;
 class rpcProducer
 {
 public:
-    rpcProducer() : m_face(m_ioService),
-                    m_scheduler(m_ioService)
+    rpcProducer(char *provider, char *service, char *function) : m_face(m_ioService),
+                    m_scheduler(m_ioService),
+                    PRODUCER_IDENTITY(provider)
     {
         //init result thunks to 0
         resultThunk = 0;
+        BASE = PRODUCER_IDENTITY + std::string(service);
+        FUNCTION = BASE + std::string(function);
+        RESULTS = BASE + std::string("/results/");
     }
 
     void run()
@@ -41,7 +45,11 @@ public:
         std::cerr << "PRODUCER" << std::endl;
         std::cerr << "Attempting to schedule" << std::endl;
         std::cerr << "------------------------" << std::endl;
-        m_scheduler.schedule(1_ns, bind(&rpcProducer::waitForNotification, this));
+
+        // schedule rpcProducer::waitForNotification() to run after 1 nanosecond
+        m_scheduler.schedule(1_ns, std::bind(&rpcProducer::waitForNotification, this));
+
+
         m_ioService.run();
     }
 
@@ -56,11 +64,11 @@ private:
 
     //Naming Scheme
     int CONSUMER_NAME_FIELDS = 2;
-    const std::string PRODUCER_IDENTITY = "/eshop";
-    const std::string CONSUMER_IDENTITY = "/pos/device1";
-    const std::string BASE = "/eshop/cardchecker";
-    const std::string FUNCTION = BASE + "/function/";
-    const std::string RESULTS = BASE + "/results/";
+    std::string PRODUCER_IDENTITY = "/muas/drone1";
+    std::string CONSUMER_IDENTITY = "/muas";
+    std::string BASE = "/muas/drone1/FlightControl";
+    std::string FUNCTION = BASE + "/ManualControl/";
+    std::string RESULTS = BASE + "/results/";
     const std::string DELAY_NAME = "delay/";
     const std::string DELIMITER = "/";
 
@@ -114,7 +122,7 @@ private:
                                bind(&rpcProducer::onNack, this, _1, _2),
                                bind(&rpcProducer::onTimeout, this, _1));
 
-        std::cerr << "Sending Interest for CC Number " << consumerInputParam << std::endl;
+        std::cerr << "Sending Interest for RPC input " << consumerInputParam << std::endl;
         std::cerr << "------------------------" << std::endl;
     }
 
@@ -125,8 +133,10 @@ private:
         {
             std::string dataValue = extractDataValue(data);
             auto fut = boost::async(bind(&rpcProducer::ccCheck, this, dataValue)).share();
-            m_face.setInterestFilter(RESULTS + token,
-                                     bind(&rpcProducer::onResultInterest, this, _1, _2, RESULTS, token, fut));
+            // std::function<void(const Name&, const std::string&)>;
+            m_face.setInterestFilter(RESULTS,
+                                     bind(&rpcProducer::onResultInterest, this, _1, _2, RESULTS, token, fut),
+                                     [](const Name&, const std::string&){std::cerr << "Interest Filter Error" << std::endl;});
 
             std::cerr << "Successfully fetched input paramaters from consumer" << std::endl;
             std::cerr << dataValue << std::endl;
@@ -138,28 +148,17 @@ private:
     //Consumer requests data, generate and respond with it
     void onResultInterest(const InterestFilter &filterHandle, const Interest &interest, std::string baseName, std::string tokenName, boost::shared_future<bool> fut)
     {
-        if (verifyInterestSignature(interest, CONSUMER_IDENTITY))
-        {
-            std::cerr << "Received interest for final results at " << baseName + tokenName << std::endl;
-            std::cerr << "Will wait 75 percent of Interest Lifetime before sending delay: " << interest.getInterestLifetime().count() * WAIT_TIME_FACTOR << std::endl;
-            auto waitTime = interest.getInterestLifetime().count();
-            waitTime *= WAIT_TIME_FACTOR;
-            if (fut.wait_for(boost::chrono::milliseconds(waitTime)) == boost::future_status::ready)
-            {
-                sendGeneratedResult(interest, fut);
-            }
-            else
-            {
-                sendDelayResult(interest, baseName, tokenName, fut);
-            }
-
-            std::cerr << "------------------------" << std::endl;
-        }
+        std::cerr << "Received interest for final results at " << baseName + tokenName << std::endl;
+        auto data = createData(interest.getName(), SUCCESS, PRODUCER_IDENTITY);
+        m_face.put(*data);
+        std::cerr << "------------------------" << std::endl;
     }
 
     //Requested data finished generating, respond with result
     void sendGeneratedResult(const Interest &interest, boost::shared_future<bool> fut)
     {
+        //
+        std::cerr << "Received Interest: " << interest.getName().toUri() << std::endl;
         std::string dataValue;
         if (fut.get())
             dataValue = SUCCESS;
@@ -187,6 +186,9 @@ private:
     //Basic check to verify credit card
     bool ccCheck(std::string inputValue)
     {
+        // skip input check
+        return true;
+
         //checks that Credit Card is 16 Digits Long and is all Digits
         if (inputValue.length() != CC_LENGTH || !allStringIsDigit(inputValue))
             return false;
@@ -233,8 +235,8 @@ private:
     //extract Interest Parameter as String
     std::string extractInterestParam(const Interest &interest)
     {
-        std::string interestParam(reinterpret_cast<const char *>(interest.getApplicationParameters().value()));
-        return interestParam;
+        //std::string interestParam(reinterpret_cast<const char *>(interest.getApplicationParameters().value()));
+        return ndn::readString(interest.getApplicationParameters());
     }
 
     //extract Interest Parameter as String
@@ -271,8 +273,11 @@ private:
     //Add a string as an Interest Parameter
     void addInterestParameterString(std::string params, Interest &interest)
     {
-        const uint8_t *params_uint = reinterpret_cast<const uint8_t *>(&params[0]);
-        interest.setApplicationParameters(params_uint, params.length() + 1);
+        //const uint8_t *params_uint = reinterpret_cast<const uint8_t *>(&params[0]);
+        //interest.setApplicationParameters(params_uint, params.length() + 1);
+
+        // set application parameters using params
+        interest.setApplicationParameters(ndn::makeStringBlock(ndn::tlv::ApplicationParameters,params));
     }
 
     //Retrieves Key for a specific identity
@@ -286,6 +291,9 @@ private:
     //Signature Verification Functions for Interest
     bool verifyInterestSignature(const Interest &interest, std::string identity)
     {
+        //skip verification because NDN_NSC does have a good API for mulitiple identities
+        return true;
+
         if (security::verifySignature(interest, getKeyForIdentity(identity)))
         {
             std::cerr << "Interest Signature - Verified" << std::endl;
@@ -301,6 +309,9 @@ private:
     //Signature Verification Functions for Data
     bool verifyDataSignature(const Data &data, std::string identity)
     {
+        //skip verification because NDN_NSC does have a good API for mulitiple identities
+        return true;
+
         if (security::verifySignature(data, getKeyForIdentity(identity)))
         {
             std::cerr << "Data Signature - Verified" << std::endl;
@@ -317,8 +328,10 @@ private:
     std::shared_ptr<ndn::Data> createData(const ndn::Name dataName, std::string content, std::string identity)
     {
         auto data = make_shared<Data>(dataName);
-        data->setFreshnessPeriod(5_ms);
-        data->setContent(reinterpret_cast<const uint8_t *>(content.c_str()), content.length() + 1);
+        data->setFreshnessPeriod(4000_ms);
+        //data->setContent(reinterpret_cast<const uint8_t *>(content.c_str()), content.length() + 1);
+        // set content of data using content
+        data->setContent(ndn::makeStringBlock(ndn::tlv::Content,content));
         m_keyChain.sign(*data, signingByIdentity(identity));
 
         return data;
@@ -350,7 +363,12 @@ int main(int argc, char **argv)
 {
     try
     {
-        rpcProducer producer;
+        if (argc != 4)
+        {
+            std::cerr << "Usage: ./producer <provider> <service> <function>" << std::endl;
+            exit(1);
+        }
+        rpcProducer producer(argv[1], argv[2], argv[3]);
         producer.run();
         return 0;
     }

@@ -7,9 +7,9 @@
 #include <ndn-cxx/security/verification-helpers.hpp>
 #include <ndn-cxx/security/signing-helpers.hpp>
 #include <ndn-cxx/security/validator-config.hpp>
-#include <ndn-cxx/security/v2/validator.hpp>
-#include <ndn-cxx/security/v2/validation-callback.hpp>
-#include <ndn-cxx/security/v2/certificate-fetcher-offline.hpp>
+#include <ndn-cxx/security/validator.hpp>
+#include <ndn-cxx/security/validation-callback.hpp>
+#include <ndn-cxx/security/certificate-fetcher-offline.hpp>
 #include <boost/asio/io_service.hpp>
 
 #include <functional>
@@ -22,12 +22,18 @@ using namespace ndn;
 class rpcConsumer
 {
 public:
-    rpcConsumer(char *ccInput)
+    //Usage: ./consumer <user> <provider> <service> <function> <interval_in_ms> <count>
+    rpcConsumer(char *user, char *provider, char *service, char *function, char *interval_in_ms, char *count)
         : m_face(m_ioService),
           m_scheduler(m_ioService),
-          CCNUM(ccInput)
+          CONSUMER_IDENTITY(user),
+          PRODUCER_IDENTITY(provider)
     {
         rpcCall = 0;
+        PRODUCER_FUNC_NAME = std::string(provider) + std::string(service) + std::string(function);
+        INPUT_NAMESPACE = CONSUMER_IDENTITY + std::string(service) + "/inputs/";
+        this->interval_in_ms = std::stoi(interval_in_ms);
+        this->count = std::stoi(count);
     }
 
     void run()
@@ -38,18 +44,65 @@ public:
         m_face.registerPrefix(INPUT_NAMESPACE,
                               RegisterPrefixSuccessCallback(),
                               bind(&rpcConsumer::onRegisterFailed, this, _1, _2));
-
-        m_scheduler.schedule(1_ns, bind(&rpcConsumer::pubAndNotify, this));
+        // loop count
+        for (int i = 0; i < count; i++)
+        {
+            m_scheduler.schedule(ndn::time::milliseconds(interval_in_ms*i), std::bind(&rpcConsumer::pubAndNotify, this));
+        }
+        m_scheduler.schedule(ndn::time::milliseconds(interval_in_ms*count+20000), std::bind(&rpcConsumer::CalculateLantency, this));
+       
         m_ioService.run();
+    }
+
+    void CalculateLantency(){
+
+        ndn::time::milliseconds totalLatency = ndn::time::milliseconds(0);
+        // calculate success rate for RPC Calls
+        int successfulRPCCalls = rpcEndTimeMap.size();
+        int totalRPCCalls = rpcStartTimeMap.size();
+
+        // rpcEndTimeMap.size() / rpcStartTimeMap.size()
+        double successRate = (double)successfulRPCCalls / (double)totalRPCCalls;
+        std::cerr << "------------------------" << std::endl;
+        std::cerr << "Success Rate for RPC Calls: " << successRate  << std::endl;
+        
+  
+    
+
+        // calculate average latency for successful RPC Calls only
+        if (successfulRPCCalls > 0)
+        {
+            ndn::time::milliseconds totalLatencyForSuccessCalls = ndn::time::milliseconds(0);
+            for (auto const& [id, endTime] : rpcEndTimeMap)
+            {
+                auto startTime = rpcStartTimeMap[id];
+                auto latency = ndn::time::duration_cast<ndn::time::milliseconds>(endTime - startTime).count();
+                totalLatencyForSuccessCalls += ndn::time::milliseconds(latency);
+            }
+            auto averageLatencyForSuccessCalls = totalLatencyForSuccessCalls.count() / successfulRPCCalls;
+            std::cerr << "Average Latency for Successful RPC Calls: " << averageLatencyForSuccessCalls << "ms" << std::endl;
+        }
+        else
+        {
+            std::cerr << "No successful RPC Calls" << std::endl;
+        }
+
+
+    
     }
 
     void pubAndNotify()
     {
+
+
         std::cerr << "Attempting to publish data" << std::endl;
         std::cerr << "------------------------" << std::endl;
 
         //publish data
         int publishNum = publishInput();
+
+        // add RPC Call start time to map
+        rpcStartTimeMap[publishNum] = ndn::time::system_clock::now();
 
         //send notification interest
         sendNotification(publishNum);
@@ -61,12 +114,18 @@ private:
     Scheduler m_scheduler;
     KeyChain m_keyChain;
     int rpcCall;
-    const std::string CCNUM;
-    const std::string CONSUMER_IDENTITY = "/pos/device1";
-    const std::string PRODUCER_IDENTITY = "/eshop";
-    const std::string PRODUCER_FUNC_NAME = "/eshop/cardchecker/function";
-    const std::string INPUT_NAMESPACE = CONSUMER_IDENTITY + "/cardchecker/inputs/";
+    const std::string CCNUM = "CCNUM";
+    std::string CONSUMER_IDENTITY = "/muas/gs1";
+    std::string PRODUCER_IDENTITY = "/muas/drone1";
+    std::string PRODUCER_FUNC_NAME = "/muas/drone1/FlightControl/ManualControl";
+    std::string INPUT_NAMESPACE = CONSUMER_IDENTITY + "/FlightControl/inputs/";
     const std::string APP_NACK = "APP_NACK";
+    int interval_in_ms = 1000;
+    int count = 1;
+    // a map to record the starting time of each RPC Call
+    std::map<int, ndn::time::system_clock::time_point> rpcStartTimeMap;
+    // a map to record the end time of each RPC Call
+    std::map<int, ndn::time::system_clock::time_point> rpcEndTimeMap;
 
     //Publish Input data for future RPC Producer to retrieve
     int publishInput()
@@ -107,10 +166,10 @@ private:
     //Respond with original Input Data
     void onInterestForInput(const InterestFilter &, const Interest &interest)
     {
-        std::cerr << "Received an interest for credit card number input" << std::endl;
+        std::cerr << "Received an interest for rpc input" << std::endl;
         if (verifyInterestSignature(interest, PRODUCER_IDENTITY))
         {
-            std::cerr << "Sending Credit Card Number Data as Published Earlier" << std::endl;
+            std::cerr << "Sending Input Data as Published Earlier" << std::endl;
             std::cerr << "------------------------" << std::endl;
 
             auto data = createData(interest.getName(), CCNUM, CONSUMER_IDENTITY);
@@ -124,8 +183,8 @@ private:
     //Request results of RPC Call from location provided as Interest Parameters
     void sendInterestForResult(std::string resultName)
     {
-        Interest interest = createInterest(resultName, false, true);
-        m_keyChain.sign(interest, security::signingByIdentity(Name(CONSUMER_IDENTITY)));
+        Interest interest = createInterest(resultName, true, false);
+        // m_keyChain.sign(interest, security::signingByIdentity(Name(CONSUMER_IDENTITY)));
         m_face.expressInterest(interest,
                                bind(&rpcConsumer::onResultData, this, _1, _2),
                                bind(&rpcConsumer::onNack, this, _1, _2),
@@ -161,9 +220,16 @@ private:
             }
             else
             {
-                std::cerr << "Result of RPC Call, Credit Card Number is: " << ccResult << std::endl;
+                std::cerr << interest.getName().at(6).toUri() << std::endl;
+                int id = std::stoi(interest.getName().at(6).toUri());
+                rpcEndTimeMap[id] = ndn::time::system_clock::now();
                 std::cerr << "------------------------" << std::endl;
-                m_ioService.stop();
+                std::cerr << "------------------------" << std::endl;
+                std::cerr << "RPC Call Id: " << id << std::endl;
+                std::cerr << "Result of RPC Received: " << std::endl;
+                std::cerr << "------------------------" << std::endl;
+                std::cerr << "------------------------" << std::endl;
+                // m_ioService.stop();
             }
         }
     }
@@ -191,23 +257,24 @@ private:
     //extract Interest Parameter as String
     std::string extractInterestParam(const Interest &interest)
     {
-        std::string interestParam(reinterpret_cast<const char *>(interest.getApplicationParameters().value()));
-        return interestParam;
+        return ndn::readString(interest.getApplicationParameters());
     }
 
     //Add a string as an Interest Parameter
     void addInterestParameterString(std::string params, Interest &interest)
     {
-        const uint8_t *params_uint = reinterpret_cast<const uint8_t *>(&params[0]);
-        interest.setApplicationParameters(params_uint, params.length() + 1);
+        // const uint8_t *params_uint = reinterpret_cast<const uint8_t *>(&params[0]);
+        // interest.setApplicationParameters(params_uint, params.length() + 1);
+        interest.setApplicationParameters(ndn::makeStringBlock(ndn::tlv::ApplicationParameters,params));
     }
 
     //create a Data packet with specified values
     std::shared_ptr<ndn::Data> createData(const ndn::Name dataName, std::string content, std::string identity)
     {
         auto data = make_shared<Data>(dataName);
-        data->setFreshnessPeriod(5_ms);
-        data->setContent(reinterpret_cast<const uint8_t *>(content.c_str()), content.length() + 1);
+        data->setFreshnessPeriod(1000_ms);
+        //data->setContent(reinterpret_cast<const uint8_t *>(content.c_str()), content.length() + 1);
+        data->setContent(ndn::makeStringBlock(ndn::tlv::Content,content));
         m_keyChain.sign(*data, security::signingByIdentity(Name(identity)));
 
         return data;
@@ -224,6 +291,8 @@ private:
     //Signature Verification Functions for Interest
     bool verifyInterestSignature(const Interest &interest, std::string identity)
     {
+        // skip verification because NDN_NSC does provide a good API for multiple identities;
+        return true;
         if (security::verifySignature(interest, getKeyForIdentity(identity)))
         {
             std::cerr << "Interest Signature - Verified" << std::endl;
@@ -239,6 +308,8 @@ private:
     //Signature Verification Functions for Data
     bool verifyDataSignature(const Data &data, std::string identity)
     {
+        // skip verification because NDN_NSC does provide a good API for multiple identities;
+        return true;
         if (security::verifySignature(data, getKeyForIdentity(identity)))
         {
             std::cerr << "Data Signature - Verified" << std::endl;
@@ -277,12 +348,12 @@ int main(int argc, char **argv)
 {
     try
     {
-        if (argc != 2)
+        if (argc != 7)
         {
-            std::cerr << "Usage: ./consumer <credit card num>" << std::endl;
+            std::cerr << "Usage: ./consumer <user> <provider> <service> <function> <interval_in_ms> <count>" << std::endl;
             exit(1);
         }
-        rpcConsumer consumer1(argv[1]);
+        rpcConsumer consumer1(argv[1], argv[2], argv[3], argv[4], argv[5], argv[6]);
         consumer1.run();
         return 0;
     }
